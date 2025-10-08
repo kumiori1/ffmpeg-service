@@ -287,7 +287,7 @@ def add_background_music(
     music_path: str,
     output_path: str,
     music_volume: float = 0.3,
-    video_volume: float = 1.0
+    video_volume: float = 5
 ) -> None:
     """
     Add background music to a video
