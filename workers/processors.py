@@ -25,7 +25,7 @@ _whisper_model_cache: Optional[object] = None
 _whisper_model_size: Optional[str] = None
 
 
-def _load_whisper_model(model_size: str = "small"):
+def _load_whisper_model(model_size: str = "tiny"):
     """Load and cache Whisper model"""
     global _whisper_model_cache, _whisper_model_size
 
