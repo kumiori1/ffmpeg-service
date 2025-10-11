@@ -326,19 +326,17 @@ def add_background_music(
     video_path: str,
     music_path: str,
     output_path: str,
-    music_volume: float = 2.0,
-    video_volume: float = 1.0
+    music_volume: float = 2.0,  # Changed default to 2.0 (200%)
+    video_volume: float = 1.0   # Changed default to 1.0 (100%)
 ) -> None:
     """
     Add background music to a video
-
     Args:
         video_path: Path to video file
         music_path: Path to music file
         output_path: Path for output video
-        music_volume: Volume level for background music
-        video_volume: Volume level for video audio
-
+        music_volume: Volume multiplier for background music (1.0 = original, 2.0 = double)
+        video_volume: Volume multiplier for video audio (1.0 = original)
     Raises:
         subprocess.CalledProcessError: If FFmpeg fails
     """
@@ -346,13 +344,15 @@ def add_background_music(
         video_duration = get_video_duration(video_path)
         logger.info(f"Adding background music to video (duration: {video_duration}s)")
         logger.info(f"Settings: music_volume={music_volume}, video_volume={video_volume}")
-
+        
+        # Use loudnorm filter to normalize audio first, then apply volume
         filter_complex = (
+            f"[1:a]loudnorm=I=-16:TP=-1.5:LRA=11,volume={music_volume},"
+            f"aloop=loop=-1:size=2e+09,atrim=duration={video_duration}[ma];"
             f"[0:a]volume={video_volume}[va];"
-            f"[1:a]volume={music_volume},aloop=loop=-1:size=2e+09,atrim=duration={video_duration}[ma];"
             f"[va][ma]amix=inputs=2:duration=first:dropout_transition=2[a]"
         )
-
+        
         cmd = [
             "ffmpeg", "-y",
             "-i", video_path,
@@ -367,27 +367,24 @@ def add_background_music(
             "-shortest",
             output_path
         ]
-
+        
         logger.info(f"Running FFmpeg background music command...")
-        logger.info(f"Command: {' '.join(cmd[:10])}...")
         logger.info(f"Full command: {' '.join(cmd)}")
-
+        
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-
+        
         logger.info(f"FFmpeg completed with return code: {result.returncode}")
         logger.info(f"Background music added: {output_path}")
-
+        
         if os.path.exists(output_path):
             output_size = os.path.getsize(output_path) / (1024 * 1024)
             logger.info(f"Output file size: {output_size:.2f}MB")
         else:
             logger.error(f"Output file does not exist: {output_path}")
-
+            
         if result.stderr:
             logger.info(f"FFmpeg stderr output: {result.stderr[-1000:]}")
-        if result.stdout:
-            logger.info(f"FFmpeg stdout output: {result.stdout[-500:]}")
-
+            
     except subprocess.CalledProcessError as e:
         logger.error(f"FFmpeg background music error: {e.stderr}")
         raise
