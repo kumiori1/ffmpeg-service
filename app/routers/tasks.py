@@ -5,6 +5,7 @@ from app.models.task import (
     CaptionTaskRequest,
     MergeTaskRequest,
     BackgroundMusicTaskRequest,
+    MergeBrollTaskRequest,
     TaskResponse,
     TaskStatusResponse,
     TaskType,
@@ -252,6 +253,111 @@ async def create_background_music_task(request: BackgroundMusicTaskRequest):
         raise
     except Exception as e:
         logger.error(f"Error creating background music task: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Internal server error"
+        )
+
+
+@router.post("/merge-broll", response_model=TaskResponse, status_code=status.HTTP_201_CREATED)
+async def create_merge_broll_task(request: MergeBrollTaskRequest):
+    """
+    Submit a B-roll merging task
+
+    This endpoint queues a main video and 6 B-roll videos to be merged.
+    B-rolls will overlay the main video at specified timestamps.
+    Returns immediately with a task_id that can be used to poll for status.
+
+    - **main_video_url**: URL of the main video
+    - **broll_urls**: List of exactly 6 B-roll video URLs
+    - **broll_timings**: List of [start, end] timing pairs for each B-roll
+    """
+    try:
+        if len(request.broll_urls) != 6:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Exactly 6 B-roll videos are required"
+            )
+
+        if len(request.broll_timings) != 6:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Exactly 6 B-roll timings are required"
+            )
+
+        for i, timing in enumerate(request.broll_timings):
+            if len(timing) != 2:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"B-roll timing {i+1} must have exactly 2 values [start, end]"
+                )
+            if timing[0] >= timing[1]:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"B-roll timing {i+1} start time must be less than end time"
+                )
+
+        main_video_url_str = str(request.main_video_url)
+        broll_urls_str = [str(url) for url in request.broll_urls]
+
+        total_size = 0
+        for url in [main_video_url_str] + broll_urls_str:
+            try:
+                size = await check_file_size(url)
+                total_size += size
+            except FileSizeLimitExceeded as e:
+                raise HTTPException(
+                    status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                    detail=str(e)
+                )
+            except DownloadError as e:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail=f"Unable to access URL {url}: {str(e)}"
+                )
+
+        max_total_size = settings.max_file_size_mb * 7 * 1024 * 1024
+        if total_size > max_total_size:
+            raise HTTPException(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                detail=f"Total file size {total_size/(1024*1024):.2f}MB exceeds limit of {settings.max_file_size_mb * 7}MB"
+            )
+
+        metadata = {
+            "broll_urls": broll_urls_str,
+            "broll_timings": request.broll_timings
+        }
+
+        task_id = supabase_service.create_task(
+            task_type=TaskType.MERGE_BROLL,
+            video_url=main_video_url_str,
+            metadata=metadata
+        )
+
+        if not task_id:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to create task in database"
+            )
+
+        enqueued = await redis_service.enqueue_task(task_id, TaskType.MERGE_BROLL.value)
+
+        if not enqueued:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to enqueue task"
+            )
+
+        return TaskResponse(
+            task_id=task_id,
+            status=TaskStatus.QUEUED,
+            message="B-roll merge task queued successfully"
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error creating B-roll merge task: {e}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Internal server error"

@@ -10,6 +10,7 @@ class TaskType(str, Enum):
     CAPTION = "caption"
     MERGE = "merge"
     BACKGROUND_MUSIC = "background_music"
+    MERGE_BROLL = "merge_broll"
 
 
 class TaskStatus(str, Enum):
@@ -121,6 +122,37 @@ class TaskStatusResponse(BaseModel):
                 "created_at": "2025-10-07T12:00:00Z",
                 "updated_at": "2025-10-07T12:05:00Z",
                 "completed_at": "2025-10-07T12:05:00Z"
+            }
+        }
+    }
+
+
+class MergeBrollTaskRequest(BaseModel):
+    """Request model for merging B-roll videos into main video"""
+    main_video_url: HttpUrl = Field(..., description="URL of the main video")
+    broll_urls: List[HttpUrl] = Field(..., min_length=6, max_length=6, description="List of exactly 6 B-roll video URLs")
+    broll_timings: List[List[float]] = Field(..., min_length=6, max_length=6, description="List of [start, end] timing pairs for each B-roll")
+
+    model_config = {
+        "json_schema_extra": {
+            "example": {
+                "main_video_url": "https://example.com/main.mp4",
+                "broll_urls": [
+                    "https://example.com/broll1.mp4",
+                    "https://example.com/broll2.mp4",
+                    "https://example.com/broll3.mp4",
+                    "https://example.com/broll4.mp4",
+                    "https://example.com/broll5.mp4",
+                    "https://example.com/broll6.mp4"
+                ],
+                "broll_timings": [
+                    [3.0, 6.0],
+                    [8.0, 11.0],
+                    [13.0, 15.0],
+                    [17.0, 20.0],
+                    [22.0, 25.0],
+                    [27.0, 30.0]
+                ]
             }
         }
     }

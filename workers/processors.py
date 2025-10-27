@@ -15,7 +15,8 @@ from utils.ffmpeg_utils import (
     burn_subtitles,
     merge_video_audio,
     concat_videos,
-    add_background_music
+    add_background_music,
+    insert_brolls_ffmpeg
 )
 
 logger = logging.getLogger(__name__)
@@ -347,6 +348,111 @@ async def process_background_music_task(task_id: UUID, task_data: Dict[str, Any]
 
     finally:
         cleanup_temp_files(video_path, music_path)
+        if temp_dir and os.path.exists(temp_dir):
+            import shutil
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+
+async def process_merge_broll_task(task_id: UUID, task_data: Dict[str, Any]) -> None:
+    """
+    Process a B-roll merging task
+
+    Args:
+        task_id: Task identifier
+        task_data: Task data from Supabase
+    """
+    temp_files = []
+    output_path = None
+
+    try:
+        logger.info(f"[{task_id}] Starting B-roll merge task")
+        logger.info(f"[{task_id}] Task data: {task_data}")
+
+        logger.info(f"[{task_id}] Updating task status to RUNNING")
+        supabase_service.update_task_status(task_id, TaskStatus.RUNNING)
+        logger.info(f"[{task_id}] Status updated to RUNNING")
+
+        metadata = task_data.get("metadata", {})
+        main_video_url = task_data["video_url"]
+        broll_urls = metadata["broll_urls"]
+        broll_timings = metadata["broll_timings"]
+
+        if len(broll_urls) != 6:
+            raise Exception(f"Expected 6 B-roll videos, got {len(broll_urls)}")
+
+        if len(broll_timings) != 6:
+            raise Exception(f"Expected 6 B-roll timings, got {len(broll_timings)}")
+
+        if not check_disk_space(settings.max_file_size_bytes * (len(broll_urls) + 1) * 3):
+            raise Exception("Insufficient disk space")
+
+        temp_dir = tempfile.mkdtemp(prefix=f"broll_{task_id}_")
+        total_size = 0
+
+        logger.info(f"[{task_id}] Downloading main video")
+        main_video_path = os.path.join(temp_dir, "main_video.mp4")
+        _, size = await download_file(main_video_url, main_video_path)
+        total_size += size
+        temp_files.append(main_video_path)
+
+        logger.info(f"[{task_id}] Downloading {len(broll_urls)} B-roll videos")
+        broll_paths = []
+        for i, broll_url in enumerate(broll_urls):
+            broll_path = os.path.join(temp_dir, f"broll_{i+1}.mp4")
+            _, size = await download_file(broll_url, broll_path)
+            total_size += size
+            broll_paths.append(broll_path)
+            temp_files.append(broll_path)
+            logger.info(f"[{task_id}] Downloaded B-roll {i+1}/{len(broll_urls)}")
+
+        broll_timings_tuples = [(float(t[0]), float(t[1])) for t in broll_timings]
+
+        output_filename = f"{task_id}_broll_merged.mp4"
+        output_path = os.path.join(settings.video_output_dir, output_filename)
+
+        logger.info(f"[{task_id}] Merging B-rolls into main video with FFmpeg")
+        loop = asyncio.get_event_loop()
+        with ThreadPoolExecutor() as executor:
+            await loop.run_in_executor(
+                executor,
+                insert_brolls_ffmpeg,
+                main_video_path,
+                broll_paths,
+                broll_timings_tuples,
+                output_path
+            )
+        logger.info(f"[{task_id}] B-roll merge complete")
+
+        if os.path.exists(output_path):
+            output_size = os.path.getsize(output_path) / (1024 * 1024)
+            logger.info(f"[{task_id}] Output video created: {output_size:.2f}MB")
+        else:
+            logger.error(f"[{task_id}] ERROR: Output video file not created!")
+
+        result_url = f"{settings.railway_public_url}/video/{output_filename}"
+
+        supabase_service.update_task_status(
+            task_id,
+            TaskStatus.SUCCESS,
+            result_video_url=result_url,
+            file_size=total_size
+        )
+
+        logger.info(f"[{task_id}] B-roll merge task completed successfully")
+
+    except Exception as e:
+        error_msg = f"B-roll merge task failed: {str(e)}"
+        logger.error(f"[{task_id}] {error_msg}", exc_info=True)
+        supabase_service.update_task_status(
+            task_id,
+            TaskStatus.FAILED,
+            error_message=error_msg
+        )
+        if output_path and os.path.exists(output_path):
+            os.remove(output_path)
+
+    finally:
+        cleanup_temp_files(*temp_files)
         if temp_dir and os.path.exists(temp_dir):
             import shutil
             shutil.rmtree(temp_dir, ignore_errors=True)

@@ -1,6 +1,7 @@
 import subprocess
 import logging
 import os
+from typing import List, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -344,7 +345,7 @@ def add_background_music(
         video_duration = get_video_duration(video_path)
         logger.info(f"Adding background music to video (duration: {video_duration}s)")
         logger.info(f"Settings: music_volume={music_volume}, video_volume={video_volume}")
-        
+
         # Use loudnorm filter to normalize audio first, then apply volume
         filter_complex = (
             f"[1:a]loudnorm=I=-16:TP=-1.5:LRA=11,volume={music_volume},"
@@ -352,7 +353,7 @@ def add_background_music(
             f"[0:a]volume={video_volume}[va];"
             f"[va][ma]amix=inputs=2:duration=first:dropout_transition=2[a]"
         )
-        
+
         cmd = [
             "ffmpeg", "-y",
             "-i", video_path,
@@ -367,24 +368,121 @@ def add_background_music(
             "-shortest",
             output_path
         ]
-        
+
         logger.info(f"Running FFmpeg background music command...")
         logger.info(f"Full command: {' '.join(cmd)}")
-        
+
         result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        
+
         logger.info(f"FFmpeg completed with return code: {result.returncode}")
         logger.info(f"Background music added: {output_path}")
-        
+
         if os.path.exists(output_path):
             output_size = os.path.getsize(output_path) / (1024 * 1024)
             logger.info(f"Output file size: {output_size:.2f}MB")
         else:
             logger.error(f"Output file does not exist: {output_path}")
-            
+
         if result.stderr:
             logger.info(f"FFmpeg stderr output: {result.stderr[-1000:]}")
-            
+
     except subprocess.CalledProcessError as e:
         logger.error(f"FFmpeg background music error: {e.stderr}")
+        raise
+
+
+def insert_brolls_ffmpeg(
+    main_video_path: str,
+    broll_paths: List[str],
+    broll_timings: List[Tuple[float, float]],
+    output_path: str
+) -> None:
+    """
+    Overlay B-roll clips on top of main video at specified timestamps using FFmpeg
+
+    Args:
+        main_video_path: Path to main video file
+        broll_paths: List of paths to B-roll video files
+        broll_timings: List of (start, end) tuples indicating when to show each B-roll
+        output_path: Path for output video
+
+    Raises:
+        subprocess.CalledProcessError: If FFmpeg fails
+    """
+    try:
+        logger.info(f"Overlaying {len(broll_paths)} B-rolls onto main video")
+        logger.info(f"B-roll timings: {broll_timings}")
+
+        if len(broll_paths) != len(broll_timings):
+            raise ValueError(
+                f"Number of B-rolls ({len(broll_paths)}) must match number of timings ({len(broll_timings)})"
+            )
+
+        cmd = ["ffmpeg", "-y", "-i", main_video_path]
+
+        for broll_path in broll_paths:
+            cmd.extend(["-i", broll_path])
+
+        filter_parts = []
+
+        for i in range(len(broll_paths)):
+            start_time, end_time = broll_timings[i]
+            duration = end_time - start_time
+
+            filter_parts.append(
+                f"[{i+1}:v]scale=1080:1920:force_original_aspect_ratio=increase,"
+                f"crop=1080:1920,setpts=PTS-STARTPTS+{start_time}/TB[vb{i+1}]"
+            )
+
+        current_label = "[0:v]"
+
+        for i in range(len(broll_paths)):
+            start_time, end_time = broll_timings[i]
+
+            if i == len(broll_paths) - 1:
+                filter_parts.append(
+                    f"{current_label}[vb{i+1}]overlay=enable='between(t,{start_time},{end_time})'[outv]"
+                )
+            else:
+                filter_parts.append(
+                    f"{current_label}[vb{i+1}]overlay=enable='between(t,{start_time},{end_time})'[v{i+1}]"
+                )
+                current_label = f"[v{i+1}]"
+
+        filter_parts.append("[0:a]acopy[outa]")
+
+        filter_complex = ";\n".join(filter_parts)
+
+        cmd.extend([
+            "-filter_complex", filter_complex,
+            "-map", "[outv]",
+            "-map", "[outa]",
+            "-c:v", "libx264",
+            "-preset", "ultrafast",
+            "-crf", "23",
+            "-c:a", "aac",
+            "-b:a", "192k",
+            "-shortest",
+            output_path
+        ])
+
+        logger.info("=" * 60)
+        logger.info("FFmpeg Command:")
+        logger.info(" ".join(cmd))
+        logger.info("=" * 60)
+        logger.info("Filter Complex:")
+        logger.info(filter_complex)
+        logger.info("=" * 60)
+
+        logger.info("Running FFmpeg...")
+        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
+
+        logger.info(f"B-rolls overlaid successfully: {output_path}")
+
+        if os.path.exists(output_path):
+            output_size = os.path.getsize(output_path) / (1024 * 1024)
+            logger.info(f"Output file size: {output_size:.2f}MB")
+
+    except subprocess.CalledProcessError as e:
+        logger.error(f"FFmpeg error: {e.stderr}")
         raise

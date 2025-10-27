@@ -10,7 +10,8 @@ from app.models.task import TaskType
 from workers.processors import (
     process_caption_task,
     process_merge_task,
-    process_background_music_task
+    process_background_music_task,
+    process_merge_broll_task
 )
 
 logging.basicConfig(
@@ -63,6 +64,9 @@ async def process_task(task_data: dict) -> None:
             elif task_type == TaskType.BACKGROUND_MUSIC.value:
                 logger.info(f"Routing task {task_id} to background music processor")
                 await process_background_music_task(task_id, full_task_data)
+            elif task_type == TaskType.MERGE_BROLL.value:
+                logger.info(f"Routing task {task_id} to B-roll merge processor")
+                await process_merge_broll_task(task_id, full_task_data)
             else:
                 logger.error(f"Unknown task type: {task_type}")
 
